@@ -199,12 +199,12 @@ async function setupCamera(facingMode) {
   if (currentStream) {
     currentStream.getTracks().forEach(function(t){ t.stop(); });
     currentStream = null;
-    // Androidではカメラハードウェアの解放に時間がかかるため待機
+    // Androidはカメラ解放に時間がかかることがあるため待機
     await sleep(300);
   }
 
-  // 端末によって対応解像度・facingMode指定の厳密さが異なるため、
-  // 段階的に制約を緩めてリトライする
+  // 端末差(PCのWebカメラ・Androidの前面/背面カメラ)に対応するため、
+  // 制約を段階的に緩めてリトライする
   const constraintsList = [
     { video: { facingMode: { exact: facingMode }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
     { video: { facingMode: { ideal: facingMode }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
@@ -222,9 +222,7 @@ async function setupCamera(facingMode) {
       lastError = err;
     }
   }
-  if (!stream) {
-    throw lastError || new Error("カメラを取得できませんでした");
-  }
+  if (!stream) throw lastError || new Error("カメラを取得できませんでした");
 
   currentStream = stream;
   currentFacingMode = facingMode;
@@ -239,7 +237,7 @@ async function setupCamera(facingMode) {
     };
   });
 
-  try { await video.play(); } catch (e) { /* Android等の自動再生制限時は無視 */ }
+  try { await video.play(); } catch (e) { /* 自動再生制限は無視 */ }
 }
 
 switchCameraBtn.addEventListener("click", async function() {
@@ -258,4 +256,241 @@ switchCameraBtn.addEventListener("click", async function() {
 });
 
 async function setupPose() {
-  const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.9/
+  const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.9/wasm");
+  const modelAssetPath = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
+  try {
+    poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+      baseOptions: { modelAssetPath: modelAssetPath, delegate: "GPU" },
+      runningMode: "VIDEO", numPoses: 1
+    });
+  } catch (e) {
+    poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+      baseOptions: { modelAssetPath: modelAssetPath, delegate: "CPU" },
+      runningMode: "VIDEO", numPoses: 1
+    });
+  }
+}
+
+async function setupSegmenter() {
+  const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.9/wasm");
+  const modelAssetPath = "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite";
+  try {
+    imageSegmenter = await ImageSegmenter.createFromOptions(vision, {
+      baseOptions: { modelAssetPath: modelAssetPath, delegate: "GPU" },
+      runningMode: "IMAGE", outputCategoryMask: false, outputConfidenceMasks: true
+    });
+  } catch (e) {
+    imageSegmenter = await ImageSegmenter.createFromOptions(vision, {
+      baseOptions: { modelAssetPath: modelAssetPath, delegate: "CPU" },
+      runningMode: "IMAGE", outputCategoryMask: false, outputConfidenceMasks: true
+    });
+  }
+}
+
+// --- 傾きセンサー(Android対応強化版) ---
+// 一部のAndroid Chromeは deviceorientation の値が null になり、
+// deviceorientationabsolute の方でしか値が取得できないことがあるため両方を監視する
+function handleOrientation(e) {
+  if (e.gamma !== null && e.gamma !== undefined) {
+    currentTilt = e.gamma;
+    tiltDisplay.textContent = "傾き:" + currentTilt.toFixed(1) + "°";
+  }
+}
+let tiltListenerAttached = false;
+function attachTiltListeners() {
+  if (tiltListenerAttached) return;
+  tiltListenerAttached = true;
+  window.addEventListener("deviceorientation", handleOrientation);
+  window.addEventListener("deviceorientationabsolute", handleOrientation);
+}
+async function tryEnableTilt() {
+  try {
+    if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
+      // iOS: ユーザー操作(タップ)が必要
+      const p = await DeviceOrientationEvent.requestPermission();
+      if (p === "granted") attachTiltListeners();
+      else showError("傾きセンサーの許可が得られませんでした");
+    } else {
+      // Android/その他: 許可不要でそのまま監視開始
+      attachTiltListeners();
+    }
+  } catch (e) {
+    // requestPermission自体が無い/失敗した端末は普通に監視だけ試みる
+    attachTiltListeners();
+  }
+}
+tryEnableTilt();
+document.addEventListener("click", function once() {
+  document.removeEventListener("click", once);
+  tryEnableTilt();
+}, { once: true });
+
+function drawLoop() {
+  if (!running) return;
+  if (poseLandmarker && video.videoWidth > 0) {
+    const result = poseLandmarker.detectForVideo(video, performance.now());
+    lastPoseResult = result;
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+    const du = new DrawingUtils(ctx);
+    if (result.landmarks && result.landmarks.length > 0) {
+      for (const lm of result.landmarks) {
+        du.drawLandmarks(lm, { radius: 4, color: "#00FF00" });
+        du.drawConnectors(lm, PoseLandmarker.POSE_CONNECTIONS, { color: "#00FFFF", lineWidth: 2 });
+      }
+    }
+  }
+  requestAnimationFrame(drawLoop);
+}
+
+function drawGrid(c, w, h, spacing, color, vP, hP) {
+  c.save();
+  c.strokeStyle = color;
+  c.lineWidth = 1;
+  for (let x = 0; x <= w; x += spacing) { c.beginPath(); c.moveTo(x,0); c.lineTo(x,h); c.stroke(); }
+  for (let y = 0; y <= h; y += spacing) { c.beginPath(); c.moveTo(0,y); c.lineTo(w,y); c.stroke(); }
+  const vx = w * (vP/100), hy = h * (hP/100);
+  c.lineWidth = 3;
+  c.beginPath(); c.moveTo(vx,0); c.lineTo(vx,h); c.stroke();
+  c.beginPath(); c.moveTo(0,hy); c.lineTo(w,hy); c.stroke();
+  c.restore();
+}
+
+function buildFeatheredAlpha(maskData, w, h) {
+  const mc = document.createElement("canvas"); mc.width=w; mc.height=h;
+  const mctx = mc.getContext("2d");
+  const mid = mctx.createImageData(w, h);
+  for (let i = 0; i < maskData.length; i++) {
+    const g = Math.round(Math.max(0, Math.min(1, maskData[i])) * 255);
+    mid.data[i*4]=g; mid.data[i*4+1]=g; mid.data[i*4+2]=g; mid.data[i*4+3]=255;
+  }
+  mctx.putImageData(mid, 0, 0);
+  const bc = document.createElement("canvas"); bc.width=w; bc.height=h;
+  const bctx = bc.getContext("2d");
+  bctx.filter = "blur(2px)";
+  bctx.drawImage(mc, 0, 0);
+  const blurred = bctx.getImageData(0,0,w,h).data;
+  const alpha = new Uint8ClampedArray(w*h);
+  for (let i = 0; i < w*h; i++) alpha[i] = blurred[i*4];
+  return alpha;
+}
+
+async function captureAndProcess() {
+  if (video.videoWidth === 0 || video.videoHeight === 0) {
+    showError("映像が準備できていません。数秒待って再度お試しください。");
+    return;
+  }
+  running = false;
+  capturedTilt = currentTilt;
+  capturedPoseLandmarks = (lastPoseResult && lastPoseResult.landmarks) || [];
+  const w = video.videoWidth, h = video.videoHeight;
+  const frameCanvas = document.createElement("canvas");
+  frameCanvas.width = w; frameCanvas.height = h;
+  frameCanvas.getContext("2d").drawImage(video, 0, 0, w, h);
+
+  const cutoutCanvas = document.createElement("canvas");
+  cutoutCanvas.width = w; cutoutCanvas.height = h;
+  const cutoutCtx = cutoutCanvas.getContext("2d");
+  cutoutCtx.drawImage(frameCanvas, 0, 0);
+
+  if (imageSegmenter) {
+    try {
+      const seg = imageSegmenter.segment(frameCanvas);
+      const conf = seg.confidenceMasks[0];
+      const maskData = conf.getAsFloat32Array().slice();
+      seg.confidenceMasks.forEach(function(m){ m.close(); });
+      const alphaArr = buildFeatheredAlpha(maskData, w, h);
+      const imgData = cutoutCtx.getImageData(0, 0, w, h);
+      for (let i = 0; i < alphaArr.length; i++) imgData.data[i*4+3] = alphaArr[i];
+      cutoutCtx.putImageData(imgData, 0, 0);
+    } catch (e) {
+      showError("人物切り抜きに失敗しました(背景を残して続行): " + e.message);
+    }
+  }
+
+  capturedPersonCanvas = cutoutCanvas;
+  renderResult();
+  resultScreen.style.display = "flex";
+}
+
+function renderResult() {
+  if (!capturedPersonCanvas) return;
+  const w = capturedPersonCanvas.width, h = capturedPersonCanvas.height;
+  resultCanvas.width = w; resultCanvas.height = h;
+  const spacing = parseInt(gridSpacingInput.value, 10);
+  spacingValue.textContent = spacing + "px";
+  const vP = parseFloat(vLinePosInput.value);
+  const hP = parseFloat(hLinePosInput.value);
+  const showPose = showPoseToggle.checked;
+  const gridFront = gridFrontToggle.checked;
+
+  resultCtx.clearRect(0, 0, w, h);
+  resultCtx.fillStyle = "#111";
+  resultCtx.fillRect(0, 0, w, h);
+
+  if (!gridFront) drawGrid(resultCtx, w, h, spacing, gridColor, vP, hP);
+
+  resultCtx.save();
+  resultCtx.translate(w/2, h/2);
+  resultCtx.rotate((-capturedTilt * Math.PI) / 180);
+  resultCtx.translate(-w/2, -h/2);
+  resultCtx.drawImage(capturedPersonCanvas, 0, 0, w, h);
+
+  if (showPose && capturedPoseLandmarks && capturedPoseLandmarks.length > 0) {
+    const du = new DrawingUtils(resultCtx);
+    for (const lm of capturedPoseLandmarks) {
+      du.drawLandmarks(lm, { radius: 4, color: "#00FF00" });
+      du.drawConnectors(lm, PoseLandmarker.POSE_CONNECTIONS, { color: "#00FFFF", lineWidth: 2 });
+    }
+  }
+  resultCtx.restore();
+
+  if (gridFront) drawGrid(resultCtx, w, h, spacing, gridColor, vP, hP);
+}
+
+gridSpacingInput.addEventListener("input", renderResult);
+vLinePosInput.addEventListener("input", renderResult);
+hLinePosInput.addEventListener("input", renderResult);
+showPoseToggle.addEventListener("change", renderResult);
+gridFrontToggle.addEventListener("change", renderResult);
+swatches.forEach(function(sw) {
+  sw.addEventListener("click", function() {
+    swatches.forEach(function(s){ s.classList.remove("active"); });
+    sw.classList.add("active");
+    gridColor = sw.dataset.color;
+    renderResult();
+  });
+});
+
+document.getElementById("shutter").addEventListener("click", function() {
+  captureAndProcess().catch(function(e){ showError(e.message || e); });
+});
+
+retakeBtn.addEventListener("click", function() {
+  resultScreen.style.display = "none";
+  capturedPersonCanvas = null;
+  capturedPoseLandmarks = null;
+  running = true;
+  drawLoop();
+});
+
+saveBtn.addEventListener("click", function() {
+  const link = document.createElement("a");
+  link.download = "posture_" + Date.now() + ".png";
+  link.href = resultCanvas.toDataURL("image/png");
+  link.click();
+});
+
+(async function() {
+  try {
+    await setupCamera(currentFacingMode);
+  } catch (err) {
+    showError("カメラが起動できませんでした: " + (err && err.message ? err.message : err));
+    return;
+  }
+  try { await setupPose(); } catch (e) { showError("姿勢検出の初期化失敗: " + e.message); }
+  try { await setupSegmenter(); } catch (e) { showError("人物切り抜きの初期化失敗: " + e.message); }
+  drawLoop();
+})();
+</script>
+</body>
+</html>
