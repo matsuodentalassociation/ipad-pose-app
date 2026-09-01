@@ -18,15 +18,18 @@ video, canvas.live { position:absolute; top:0; left:0; width:100%; height:100%; 
 #errorBox { position:fixed; top:0; left:0; right:0; z-index:9999; background:#c81e1e; color:#fff; padding:10px; font-size:13px; display:none; font-family:-apple-system, sans-serif; }
 #debugBox { position:absolute; top:60px; left:10px; z-index:100; background:rgba(0,0,0,0.6); color:#0f0; padding:6px 9px; border-radius:8px; font-size:11px; font-family:monospace; max-width:80vw; white-space:pre-wrap; }
 #resultScreen { position:fixed; inset:0; background:rgba(0,0,0,0.92); z-index:200; display:none; flex-direction:column; align-items:center; justify-content:center; font-family:-apple-system, sans-serif; color:#fff; height: var(--app-height, 100vh); }
-#resultCanvas { max-width:92vw; max-height:44vh; background:#111; border-radius:6px; }
-#controls { margin-top:10px; width:92vw; max-width:420px; display:flex; flex-direction:column; gap:8px; max-height:42vh; overflow-y:auto; padding-bottom: env(safe-area-inset-bottom); }
-#controls .row { display:flex; align-items:center; justify-content:space-between; gap:12px; background:rgba(255,255,255,0.06); padding:9px 14px; border-radius:10px; }
+#resultCanvas { max-width:92vw; max-height:40vh; background:#111; border-radius:6px; }
+#controls { margin-top:8px; width:92vw; max-width:420px; display:flex; flex-direction:column; gap:6px; max-height:46vh; overflow-y:auto; padding-bottom: env(safe-area-inset-bottom); box-sizing:border-box; padding-left:2px; padding-right:2px; }
+#controls .section-title { font-size:11px; opacity:0.55; margin:6px 2px 0; letter-spacing:1px; }
+#controls .row { display:flex; align-items:center; justify-content:space-between; gap:10px; background:rgba(255,255,255,0.06); padding:8px 12px; border-radius:10px; box-sizing:border-box; }
+#controls .row-col { flex-direction:column; align-items:stretch; gap:4px; }
+#controls .row-col .row-header { display:flex; justify-content:space-between; font-size:12px; opacity:0.85; }
+#controls .row-col input[type="range"] { width:100%; margin:0; box-sizing:border-box; }
 #controls label { font-size:13px; opacity:0.85; white-space:nowrap; }
-#controls input[type="range"] { flex:1; margin:0 10px; }
 #colorSwatches { display:flex; gap:8px; }
-.swatch { width:26px; height:26px; border-radius:50%; border:3px solid transparent; touch-action:manipulation; }
+.swatch { width:24px; height:24px; border-radius:50%; border:3px solid transparent; touch-action:manipulation; flex-shrink:0; }
 .swatch.active { border-color:#0a84ff; }
-.toggle-row input[type="checkbox"] { width:22px; height:22px; }
+.toggle-row input[type="checkbox"] { width:20px; height:20px; flex-shrink:0; }
 #removeBgBtn { padding:12px; border:none; border-radius:10px; font-size:15px; font-weight:600; background:#ff9500; color:#fff; touch-action:manipulation; }
 #removeBgBtn:disabled { opacity:0.6; }
 #buttonRow { display:flex; gap:12px; margin-top:4px; }
@@ -57,9 +60,28 @@ video, canvas.live { position:absolute; top:0; left:0; width:100%; height:100%; 
   <canvas id="resultCanvas"></canvas>
   <div id="controls">
     <button id="removeBgBtn">背景を削除</button>
-    <div class="row"><label>格子の間隔</label><input type="range" id="gridSpacing" min="20" max="150" value="50"><span id="spacingValue">50px</span></div>
-    <div class="row"><label>垂直基準線</label><input type="range" id="vLinePos" min="0" max="100" value="50"></div>
-    <div class="row"><label>水平基準線</label><input type="range" id="hLinePos" min="0" max="100" value="50"></div>
+
+    <div class="section-title">基準線</div>
+    <div class="row row-col">
+      <div class="row-header"><label>垂直位置</label></div>
+      <input type="range" id="vLinePos" min="0" max="100" value="50">
+    </div>
+    <div class="row toggle-row"><label>垂直線を表示</label><input type="checkbox" id="showVLineToggle" checked></div>
+    <div class="row row-col">
+      <div class="row-header"><label>水平位置</label></div>
+      <input type="range" id="hLinePos" min="0" max="100" value="50">
+    </div>
+    <div class="row toggle-row"><label>水平線を表示</label><input type="checkbox" id="showHLineToggle" checked></div>
+
+    <div class="section-title">格子(グリッド)</div>
+    <div class="row row-col">
+      <div class="row-header"><label>間隔</label><span id="spacingValue">50px</span></div>
+      <input type="range" id="gridSpacing" min="20" max="150" value="50">
+    </div>
+    <div class="row toggle-row"><label>格子を表示</label><input type="checkbox" id="showGridLinesToggle" checked></div>
+    <div class="row toggle-row"><label>基準線に合わせる</label><input type="checkbox" id="snapGridToggle"></div>
+    <div class="row toggle-row"><label>格子を前面に表示</label><input type="checkbox" id="gridFrontToggle"></div>
+
     <div class="row">
       <label>線の色</label>
       <div id="colorSwatches">
@@ -69,13 +91,11 @@ video, canvas.live { position:absolute; top:0; left:0; width:100%; height:100%; 
         <div class="swatch" data-color="#0a84ff" style="background:#0a84ff;"></div>
       </div>
     </div>
-    <div class="row toggle-row"><label>垂直基準線を表示</label><input type="checkbox" id="showVLineToggle" checked></div>
-    <div class="row toggle-row"><label>水平基準線を表示</label><input type="checkbox" id="showHLineToggle" checked></div>
-    <div class="row toggle-row"><label>格子線を表示</label><input type="checkbox" id="showGridLinesToggle" checked></div>
-    <div class="row toggle-row"><label>格子を基準線に合わせる</label><input type="checkbox" id="snapGridToggle"></div>
+
+    <div class="section-title">その他</div>
     <div class="row toggle-row"><label>姿勢解析点を表示</label><input type="checkbox" id="showPoseToggle" checked></div>
-    <div class="row toggle-row"><label>グリッドを前面に表示</label><input type="checkbox" id="gridFrontToggle"></div>
     <div class="row toggle-row"><label>傾き補正を反転</label><input type="checkbox" id="invertTiltToggle"></div>
+
     <div id="buttonRow">
       <button id="retakeBtn">再撮影</button>
       <button id="saveBtn">画像を保存</button>
@@ -136,6 +156,7 @@ let capturedTilt=0;
 let capturedFacingMode="environment";
 let capturedRawFrameCanvas=null;
 let capturedPersonCanvas=null;
+let segmentedPersonCanvas=null;
 let bgRemoved=false;
 let capturedPoseLandmarks=null;
 let lastPoseResult=null;
@@ -328,6 +349,7 @@ async function captureAndProcess(){
   frameCanvas.getContext("2d").drawImage(video,0,0,w,h);
   capturedRawFrameCanvas=frameCanvas;
   capturedPersonCanvas=frameCanvas;
+  segmentedPersonCanvas=null;
   bgRemoved=false;
   removeBgBtn.disabled=false;
   removeBgBtn.textContent="背景を削除";
@@ -337,6 +359,23 @@ async function captureAndProcess(){
 
 removeBgBtn.addEventListener("click",async function(){
   if(!capturedRawFrameCanvas) return;
+
+  if(bgRemoved){
+    capturedPersonCanvas=capturedRawFrameCanvas;
+    bgRemoved=false;
+    removeBgBtn.textContent="背景を削除";
+    renderResult();
+    return;
+  }
+
+  if(segmentedPersonCanvas){
+    capturedPersonCanvas=segmentedPersonCanvas;
+    bgRemoved=true;
+    removeBgBtn.textContent="背景を復元";
+    renderResult();
+    return;
+  }
+
   if(!imageSegmenter){ showError("背景削除の準備ができていません"); return; }
   removeBgBtn.disabled=true;
   removeBgBtn.textContent="処理中...";
@@ -354,14 +393,16 @@ removeBgBtn.addEventListener("click",async function(){
     const imgData=cutoutCtx.getImageData(0,0,w,h);
     for(let i=0;i<alphaArr.length;i++) imgData.data[i*4+3]=alphaArr[i];
     cutoutCtx.putImageData(imgData,0,0);
+    segmentedPersonCanvas=cutoutCanvas;
     capturedPersonCanvas=cutoutCanvas;
     bgRemoved=true;
-    removeBgBtn.textContent="削除済み";
+    removeBgBtn.textContent="背景を復元";
     renderResult();
   }catch(e){
     showError("背景削除に失敗しました: "+e.message);
-    removeBgBtn.disabled=false;
     removeBgBtn.textContent="背景を削除";
+  }finally{
+    removeBgBtn.disabled=false;
   }
 });
 
@@ -436,6 +477,7 @@ retakeBtn.addEventListener("click",function(){
   resultScreen.style.display="none";
   capturedRawFrameCanvas=null;
   capturedPersonCanvas=null;
+  segmentedPersonCanvas=null;
   capturedPoseLandmarks=null;
   bgRemoved=false;
   running=true;
