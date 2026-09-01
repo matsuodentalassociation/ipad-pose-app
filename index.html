@@ -6,39 +6,30 @@
 <title>姿勢解析</title>
 <style>
   html, body { margin:0; height:100%; background:#000; overflow:hidden; }
-  #container {
-    position:relative; width:100vw;
-    height: var(--app-height, 100vh);
-  }
-  video, canvas.live {
-    position:absolute; top:0; left:0;
-    width:100%; height:100%; object-fit:cover;
-  }
+  #container { position:relative; width:100vw; height: var(--app-height, 100vh); }
+  video, canvas.live { position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover; }
   #shutter {
-    position:absolute;
-    bottom: calc(24px + env(safe-area-inset-bottom));
+    position:absolute; bottom: calc(24px + env(safe-area-inset-bottom));
     left:50%; transform:translateX(-50%);
     width:70px; height:70px; border-radius:50%;
     background:#fff; border:4px solid #ccc; z-index:100;
     touch-action:manipulation;
   }
   #topBar {
-    position:absolute;
-    top: calc(10px + env(safe-area-inset-top));
+    position:absolute; top: calc(10px + env(safe-area-inset-top));
     left:10px; right:10px; z-index:100;
     display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px;
     font-family:-apple-system, sans-serif; color:#fff;
   }
-  #tiltDisplay {
-    background:rgba(0,0,0,0.55); padding:6px 9px; border-radius:8px;
-    font-size:12px; white-space:nowrap;
-  }
-  #switchCameraBtn {
-    padding:8px 12px; border:none; border-radius:8px;
+  #tiltDisplay { background:rgba(0,0,0,0.55); padding:6px 9px; border-radius:8px; font-size:12px; white-space:nowrap; }
+  #topBarButtons { display:flex; gap:6px; }
+  #switchCameraBtn, #calibrateBtn {
+    padding:8px 10px; border:none; border-radius:8px;
     background:#0a84ff; color:#fff; font-size:12px; font-weight:600;
-    touch-action:manipulation;
+    touch-action:manipulation; white-space:nowrap;
   }
-  #switchCameraBtn:disabled { opacity:0.5; }
+  #calibrateBtn { background:#8e44ad; }
+  #switchCameraBtn:disabled, #calibrateBtn:disabled { opacity:0.5; }
   #errorBox {
     position:fixed; top:0; left:0; right:0; z-index:9999;
     background:#c81e1e; color:#fff; padding:10px; font-size:13px;
@@ -51,11 +42,11 @@
     font-family:-apple-system, sans-serif; color:#fff;
     height: var(--app-height, 100vh);
   }
-  #resultCanvas { max-width:92vw; max-height:50vh; background:#111; border-radius:6px; }
+  #resultCanvas { max-width:92vw; max-height:46vh; background:#111; border-radius:6px; }
   #controls {
     margin-top:10px; width:92vw; max-width:420px;
     display:flex; flex-direction:column; gap:8px;
-    max-height:36vh; overflow-y:auto;
+    max-height:40vh; overflow-y:auto;
     padding-bottom: env(safe-area-inset-bottom);
   }
   #controls .row {
@@ -68,6 +59,11 @@
   .swatch { width:26px; height:26px; border-radius:50%; border:3px solid transparent; touch-action:manipulation; }
   .swatch.active { border-color:#0a84ff; }
   .toggle-row input[type="checkbox"] { width:22px; height:22px; }
+  #removeBgBtn {
+    padding:12px; border:none; border-radius:10px; font-size:15px; font-weight:600;
+    background:#ff9500; color:#fff; touch-action:manipulation;
+  }
+  #removeBgBtn:disabled { opacity:0.6; }
   #buttonRow { display:flex; gap:12px; margin-top:4px; }
   #buttonRow button { flex:1; padding:12px; border:none; border-radius:10px; font-size:15px; font-weight:600; touch-action:manipulation; }
   #retakeBtn { background:#555; color:#fff; }
@@ -84,7 +80,10 @@
 
   <div id="topBar">
     <span id="tiltDisplay">傾き:--</span>
-    <button id="switchCameraBtn">📷 背面</button>
+    <div id="topBarButtons">
+      <button id="calibrateBtn">傾き基準</button>
+      <button id="switchCameraBtn">📷 背面</button>
+    </div>
   </div>
 
   <button id="shutter"></button>
@@ -93,6 +92,7 @@
 <div id="resultScreen">
   <canvas id="resultCanvas"></canvas>
   <div id="controls">
+    <button id="removeBgBtn">背景を削除</button>
     <div class="row">
       <label>格子の間隔</label>
       <input type="range" id="gridSpacing" min="20" max="150" value="50">
@@ -123,6 +123,10 @@
       <label>グリッドを前面に表示</label>
       <input type="checkbox" id="gridFrontToggle">
     </div>
+    <div class="row toggle-row">
+      <label>傾き補正を反転</label>
+      <input type="checkbox" id="invertTiltToggle">
+    </div>
     <div id="buttonRow">
       <button id="retakeBtn">再撮影</button>
       <button id="saveBtn">画像を保存</button>
@@ -136,9 +140,7 @@
     box.style.display = "block";
     box.textContent = "エラー: " + msg;
   }
-  window.addEventListener("error", function(e) {
-    showError(e.message);
-  });
+  window.addEventListener("error", function(e) { showError(e.message); });
   window.addEventListener("unhandledrejection", function(e) {
     showError(e.reason ? (e.reason.message || e.reason) : e.reason);
   });
@@ -164,16 +166,19 @@ const video = document.getElementById("video");
 const overlay = document.getElementById("overlay");
 const ctx = overlay.getContext("2d");
 const tiltDisplay = document.getElementById("tiltDisplay");
+const calibrateBtn = document.getElementById("calibrateBtn");
 const switchCameraBtn = document.getElementById("switchCameraBtn");
 const resultScreen = document.getElementById("resultScreen");
 const resultCanvas = document.getElementById("resultCanvas");
 const resultCtx = resultCanvas.getContext("2d");
+const removeBgBtn = document.getElementById("removeBgBtn");
 const gridSpacingInput = document.getElementById("gridSpacing");
 const spacingValue = document.getElementById("spacingValue");
 const vLinePosInput = document.getElementById("vLinePos");
 const hLinePosInput = document.getElementById("hLinePos");
 const showPoseToggle = document.getElementById("showPoseToggle");
 const gridFrontToggle = document.getElementById("gridFrontToggle");
+const invertTiltToggle = document.getElementById("invertTiltToggle");
 const retakeBtn = document.getElementById("retakeBtn");
 const saveBtn = document.getElementById("saveBtn");
 const swatches = document.querySelectorAll(".swatch");
@@ -181,316 +186,5 @@ const swatches = document.querySelectorAll(".swatch");
 let poseLandmarker = null;
 let imageSegmenter = null;
 let running = true;
-let currentTilt = 0;
-let capturedTilt = 0;
-let capturedPersonCanvas = null;
-let capturedPoseLandmarks = null;
-let lastPoseResult = null;
-let gridColor = "#ffffff";
-let currentFacingMode = "environment";
-let currentStream = null;
-let isSwitchingCamera = false;
 
-function sleep(ms) {
-  return new Promise(function(r){ setTimeout(r, ms); });
-}
-
-async function setupCamera(facingMode) {
-  if (currentStream) {
-    currentStream.getTracks().forEach(function(t){ t.stop(); });
-    currentStream = null;
-    // Androidはカメラ解放に時間がかかることがあるため待機
-    await sleep(300);
-  }
-
-  // 端末差(PCのWebカメラ・Androidの前面/背面カメラ)に対応するため、
-  // 制約を段階的に緩めてリトライする
-  const constraintsList = [
-    { video: { facingMode: { exact: facingMode }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
-    { video: { facingMode: { ideal: facingMode }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
-    { video: { facingMode: { ideal: facingMode } }, audio: false },
-    { video: true, audio: false }
-  ];
-
-  let stream = null;
-  let lastError = null;
-  for (let i = 0; i < constraintsList.length; i++) {
-    try {
-      stream = await navigator.mediaDevices.getUserMedia(constraintsList[i]);
-      break;
-    } catch (err) {
-      lastError = err;
-    }
-  }
-  if (!stream) throw lastError || new Error("カメラを取得できませんでした");
-
-  currentStream = stream;
-  currentFacingMode = facingMode;
-  video.srcObject = stream;
-  switchCameraBtn.textContent = facingMode === "environment" ? "📷 背面" : "📷 前面";
-
-  await new Promise(function(resolve) {
-    video.onloadedmetadata = function() {
-      overlay.width = video.videoWidth;
-      overlay.height = video.videoHeight;
-      resolve();
-    };
-  });
-
-  try { await video.play(); } catch (e) { /* 自動再生制限は無視 */ }
-}
-
-switchCameraBtn.addEventListener("click", async function() {
-  if (isSwitchingCamera) return;
-  isSwitchingCamera = true;
-  switchCameraBtn.disabled = true;
-  const next = currentFacingMode === "environment" ? "user" : "environment";
-  try {
-    await setupCamera(next);
-  } catch (err) {
-    showError("カメラ切替に失敗しました: " + (err && err.message ? err.message : err));
-  } finally {
-    isSwitchingCamera = false;
-    switchCameraBtn.disabled = false;
-  }
-});
-
-async function setupPose() {
-  const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.9/wasm");
-  const modelAssetPath = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
-  try {
-    poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
-      baseOptions: { modelAssetPath: modelAssetPath, delegate: "GPU" },
-      runningMode: "VIDEO", numPoses: 1
-    });
-  } catch (e) {
-    poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
-      baseOptions: { modelAssetPath: modelAssetPath, delegate: "CPU" },
-      runningMode: "VIDEO", numPoses: 1
-    });
-  }
-}
-
-async function setupSegmenter() {
-  const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.9/wasm");
-  const modelAssetPath = "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite";
-  try {
-    imageSegmenter = await ImageSegmenter.createFromOptions(vision, {
-      baseOptions: { modelAssetPath: modelAssetPath, delegate: "GPU" },
-      runningMode: "IMAGE", outputCategoryMask: false, outputConfidenceMasks: true
-    });
-  } catch (e) {
-    imageSegmenter = await ImageSegmenter.createFromOptions(vision, {
-      baseOptions: { modelAssetPath: modelAssetPath, delegate: "CPU" },
-      runningMode: "IMAGE", outputCategoryMask: false, outputConfidenceMasks: true
-    });
-  }
-}
-
-// --- 傾きセンサー(Android対応強化版) ---
-// 一部のAndroid Chromeは deviceorientation の値が null になり、
-// deviceorientationabsolute の方でしか値が取得できないことがあるため両方を監視する
-function handleOrientation(e) {
-  if (e.gamma !== null && e.gamma !== undefined) {
-    currentTilt = e.gamma;
-    tiltDisplay.textContent = "傾き:" + currentTilt.toFixed(1) + "°";
-  }
-}
-let tiltListenerAttached = false;
-function attachTiltListeners() {
-  if (tiltListenerAttached) return;
-  tiltListenerAttached = true;
-  window.addEventListener("deviceorientation", handleOrientation);
-  window.addEventListener("deviceorientationabsolute", handleOrientation);
-}
-async function tryEnableTilt() {
-  try {
-    if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
-      // iOS: ユーザー操作(タップ)が必要
-      const p = await DeviceOrientationEvent.requestPermission();
-      if (p === "granted") attachTiltListeners();
-      else showError("傾きセンサーの許可が得られませんでした");
-    } else {
-      // Android/その他: 許可不要でそのまま監視開始
-      attachTiltListeners();
-    }
-  } catch (e) {
-    // requestPermission自体が無い/失敗した端末は普通に監視だけ試みる
-    attachTiltListeners();
-  }
-}
-tryEnableTilt();
-document.addEventListener("click", function once() {
-  document.removeEventListener("click", once);
-  tryEnableTilt();
-}, { once: true });
-
-function drawLoop() {
-  if (!running) return;
-  if (poseLandmarker && video.videoWidth > 0) {
-    const result = poseLandmarker.detectForVideo(video, performance.now());
-    lastPoseResult = result;
-    ctx.clearRect(0, 0, overlay.width, overlay.height);
-    const du = new DrawingUtils(ctx);
-    if (result.landmarks && result.landmarks.length > 0) {
-      for (const lm of result.landmarks) {
-        du.drawLandmarks(lm, { radius: 4, color: "#00FF00" });
-        du.drawConnectors(lm, PoseLandmarker.POSE_CONNECTIONS, { color: "#00FFFF", lineWidth: 2 });
-      }
-    }
-  }
-  requestAnimationFrame(drawLoop);
-}
-
-function drawGrid(c, w, h, spacing, color, vP, hP) {
-  c.save();
-  c.strokeStyle = color;
-  c.lineWidth = 1;
-  for (let x = 0; x <= w; x += spacing) { c.beginPath(); c.moveTo(x,0); c.lineTo(x,h); c.stroke(); }
-  for (let y = 0; y <= h; y += spacing) { c.beginPath(); c.moveTo(0,y); c.lineTo(w,y); c.stroke(); }
-  const vx = w * (vP/100), hy = h * (hP/100);
-  c.lineWidth = 3;
-  c.beginPath(); c.moveTo(vx,0); c.lineTo(vx,h); c.stroke();
-  c.beginPath(); c.moveTo(0,hy); c.lineTo(w,hy); c.stroke();
-  c.restore();
-}
-
-function buildFeatheredAlpha(maskData, w, h) {
-  const mc = document.createElement("canvas"); mc.width=w; mc.height=h;
-  const mctx = mc.getContext("2d");
-  const mid = mctx.createImageData(w, h);
-  for (let i = 0; i < maskData.length; i++) {
-    const g = Math.round(Math.max(0, Math.min(1, maskData[i])) * 255);
-    mid.data[i*4]=g; mid.data[i*4+1]=g; mid.data[i*4+2]=g; mid.data[i*4+3]=255;
-  }
-  mctx.putImageData(mid, 0, 0);
-  const bc = document.createElement("canvas"); bc.width=w; bc.height=h;
-  const bctx = bc.getContext("2d");
-  bctx.filter = "blur(2px)";
-  bctx.drawImage(mc, 0, 0);
-  const blurred = bctx.getImageData(0,0,w,h).data;
-  const alpha = new Uint8ClampedArray(w*h);
-  for (let i = 0; i < w*h; i++) alpha[i] = blurred[i*4];
-  return alpha;
-}
-
-async function captureAndProcess() {
-  if (video.videoWidth === 0 || video.videoHeight === 0) {
-    showError("映像が準備できていません。数秒待って再度お試しください。");
-    return;
-  }
-  running = false;
-  capturedTilt = currentTilt;
-  capturedPoseLandmarks = (lastPoseResult && lastPoseResult.landmarks) || [];
-  const w = video.videoWidth, h = video.videoHeight;
-  const frameCanvas = document.createElement("canvas");
-  frameCanvas.width = w; frameCanvas.height = h;
-  frameCanvas.getContext("2d").drawImage(video, 0, 0, w, h);
-
-  const cutoutCanvas = document.createElement("canvas");
-  cutoutCanvas.width = w; cutoutCanvas.height = h;
-  const cutoutCtx = cutoutCanvas.getContext("2d");
-  cutoutCtx.drawImage(frameCanvas, 0, 0);
-
-  if (imageSegmenter) {
-    try {
-      const seg = imageSegmenter.segment(frameCanvas);
-      const conf = seg.confidenceMasks[0];
-      const maskData = conf.getAsFloat32Array().slice();
-      seg.confidenceMasks.forEach(function(m){ m.close(); });
-      const alphaArr = buildFeatheredAlpha(maskData, w, h);
-      const imgData = cutoutCtx.getImageData(0, 0, w, h);
-      for (let i = 0; i < alphaArr.length; i++) imgData.data[i*4+3] = alphaArr[i];
-      cutoutCtx.putImageData(imgData, 0, 0);
-    } catch (e) {
-      showError("人物切り抜きに失敗しました(背景を残して続行): " + e.message);
-    }
-  }
-
-  capturedPersonCanvas = cutoutCanvas;
-  renderResult();
-  resultScreen.style.display = "flex";
-}
-
-function renderResult() {
-  if (!capturedPersonCanvas) return;
-  const w = capturedPersonCanvas.width, h = capturedPersonCanvas.height;
-  resultCanvas.width = w; resultCanvas.height = h;
-  const spacing = parseInt(gridSpacingInput.value, 10);
-  spacingValue.textContent = spacing + "px";
-  const vP = parseFloat(vLinePosInput.value);
-  const hP = parseFloat(hLinePosInput.value);
-  const showPose = showPoseToggle.checked;
-  const gridFront = gridFrontToggle.checked;
-
-  resultCtx.clearRect(0, 0, w, h);
-  resultCtx.fillStyle = "#111";
-  resultCtx.fillRect(0, 0, w, h);
-
-  if (!gridFront) drawGrid(resultCtx, w, h, spacing, gridColor, vP, hP);
-
-  resultCtx.save();
-  resultCtx.translate(w/2, h/2);
-  resultCtx.rotate((-capturedTilt * Math.PI) / 180);
-  resultCtx.translate(-w/2, -h/2);
-  resultCtx.drawImage(capturedPersonCanvas, 0, 0, w, h);
-
-  if (showPose && capturedPoseLandmarks && capturedPoseLandmarks.length > 0) {
-    const du = new DrawingUtils(resultCtx);
-    for (const lm of capturedPoseLandmarks) {
-      du.drawLandmarks(lm, { radius: 4, color: "#00FF00" });
-      du.drawConnectors(lm, PoseLandmarker.POSE_CONNECTIONS, { color: "#00FFFF", lineWidth: 2 });
-    }
-  }
-  resultCtx.restore();
-
-  if (gridFront) drawGrid(resultCtx, w, h, spacing, gridColor, vP, hP);
-}
-
-gridSpacingInput.addEventListener("input", renderResult);
-vLinePosInput.addEventListener("input", renderResult);
-hLinePosInput.addEventListener("input", renderResult);
-showPoseToggle.addEventListener("change", renderResult);
-gridFrontToggle.addEventListener("change", renderResult);
-swatches.forEach(function(sw) {
-  sw.addEventListener("click", function() {
-    swatches.forEach(function(s){ s.classList.remove("active"); });
-    sw.classList.add("active");
-    gridColor = sw.dataset.color;
-    renderResult();
-  });
-});
-
-document.getElementById("shutter").addEventListener("click", function() {
-  captureAndProcess().catch(function(e){ showError(e.message || e); });
-});
-
-retakeBtn.addEventListener("click", function() {
-  resultScreen.style.display = "none";
-  capturedPersonCanvas = null;
-  capturedPoseLandmarks = null;
-  running = true;
-  drawLoop();
-});
-
-saveBtn.addEventListener("click", function() {
-  const link = document.createElement("a");
-  link.download = "posture_" + Date.now() + ".png";
-  link.href = resultCanvas.toDataURL("image/png");
-  link.click();
-});
-
-(async function() {
-  try {
-    await setupCamera(currentFacingMode);
-  } catch (err) {
-    showError("カメラが起動できませんでした: " + (err && err.message ? err.message : err));
-    return;
-  }
-  try { await setupPose(); } catch (e) { showError("姿勢検出の初期化失敗: " + e.message); }
-  try { await setupSegmenter(); } catch (e) { showError("人物切り抜きの初期化失敗: " + e.message); }
-  drawLoop();
-})();
-</script>
-</body>
-</html>
+// ---
